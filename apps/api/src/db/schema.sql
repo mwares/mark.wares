@@ -1,7 +1,12 @@
 -- Solar Monitor Database Schema
--- Requires PostgreSQL with TimescaleDB extension
+-- Works with plain PostgreSQL; TimescaleDB hypertable is optional
 
-CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+DO $$ BEGIN
+  CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'TimescaleDB not available, using plain table for energy_readings';
+END $$;
+
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Users
@@ -36,7 +41,11 @@ CREATE TABLE IF NOT EXISTS energy_readings (
   battery_soe REAL
 );
 
-SELECT create_hypertable('energy_readings', 'time', if_not_exists => TRUE);
+DO $$ BEGIN
+  PERFORM create_hypertable('energy_readings', 'time', if_not_exists => TRUE);
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'Skipping hypertable creation (TimescaleDB not available)';
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_readings_user ON energy_readings (user_id, time DESC);
 
