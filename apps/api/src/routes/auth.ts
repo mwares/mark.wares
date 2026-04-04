@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import bcrypt from 'bcrypt';
 import { db } from '../db/client.js';
+import { DEMO_SITE_ID } from '@solar-monitor/shared';
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Body: { email: string; password: string } }>('/register', async (request, reply) => {
@@ -28,10 +29,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const user = result.rows[0];
     const token = app.jwt.sign({ id: user.id, email: user.email });
 
+    // Auto-provision demo Tesla connection for new users
+    await db.query(
+      `INSERT INTO tesla_connections (user_id, site_id, access_token_enc, refresh_token_enc, token_expires_at, site_name, is_demo)
+       VALUES ($1, $2, 'demo', 'demo', NOW() + INTERVAL '10 years', 'Demo Home', true)
+       ON CONFLICT DO NOTHING`,
+      [user.id, DEMO_SITE_ID],
+    );
+
     return reply.status(201).send({
       data: {
         user: { id: user.id, email: user.email, createdAt: user.created_at },
         token,
+        isDemo: true,
       },
     });
   });
