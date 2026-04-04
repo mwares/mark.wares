@@ -73,4 +73,43 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       },
     });
   });
+
+  // ── Push Token Management ──
+
+  app.post<{ Body: { token: string; platform: string } }>(
+    '/push-token',
+    { onRequest: [(app as any).authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as any).id;
+      const { token, platform } = request.body;
+
+      if (!token || !platform) {
+        return reply.status(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'Token and platform required' },
+        });
+      }
+
+      await db.query(
+        `INSERT INTO push_tokens (user_id, token)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id, token) DO NOTHING`,
+        [userId, token],
+      );
+
+      return reply.status(201).send({ data: { registered: true } });
+    },
+  );
+
+  app.delete<{ Params: { token: string } }>(
+    '/push-token/:token',
+    { onRequest: [(app as any).authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as any).id;
+      const { token } = request.params;
+
+      await db.query('DELETE FROM push_tokens WHERE user_id = $1 AND token = $2', [userId, token]);
+
+      return reply.send({ data: { removed: true } });
+    },
+  );
 };

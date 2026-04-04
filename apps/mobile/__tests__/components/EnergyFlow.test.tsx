@@ -2,6 +2,20 @@ import React from 'react';
 import { render, screen } from '@testing-library/react-native';
 import { EnergyFlow } from '../../components/EnergyFlow';
 
+// Mock react-native-reanimated
+jest.mock('react-native-reanimated', () => {
+  const Reanimated = require('react-native-reanimated/mock');
+  Reanimated.default.createAnimatedComponent = (component: any) => component;
+  return {
+    ...Reanimated,
+    useSharedValue: jest.fn((init) => ({ value: init })),
+    useAnimatedProps: jest.fn(() => ({})),
+    withRepeat: jest.fn((val) => val),
+    withTiming: jest.fn((val) => val),
+    Easing: { linear: 'linear' },
+  };
+});
+
 describe('EnergyFlow', () => {
   it('renders all energy labels', () => {
     render(<EnergyFlow solarW={5000} batteryW={1000} gridW={-500} homeW={3500} />);
