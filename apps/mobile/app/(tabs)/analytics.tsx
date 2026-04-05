@@ -1,14 +1,63 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { colors, spacing, fontSize, commonStyles, borderRadius } from '@/theme';
 import { TimeSeriesChart } from '@/components/TimeSeriesChart';
+import { UsageHeatmap } from '@/components/UsageHeatmap';
+import { AnomalyCard } from '@/components/AnomalyCard';
 import { useEnergyData } from '@/hooks/useEnergyData';
+import { api } from '@/services/api';
 
 type Period = 'day' | 'week' | 'month' | 'year';
+
+interface HourlyData {
+  hour: number;
+  avgSolarW: number;
+  avgHomeW: number;
+  avgGridW: number;
+  avgBatteryW: number;
+}
+
+interface AnomalyDay {
+  date: string;
+  metric: string;
+  value: number;
+  expectedRange: { min: number; max: number };
+  description: string;
+}
+
+interface PeakTime {
+  hour: number;
+  avgW: number;
+}
+
+type HeatmapMetric = 'avgHomeW' | 'avgSolarW' | 'avgGridW';
 
 export default function AnalyticsScreen() {
   const [period, setPeriod] = useState<Period>('day');
   const { history, summary, isLoading } = useEnergyData(period);
+  const [hourlyData, setHourlyData] = useState<HourlyData[]>([]);
+  const [anomalies, setAnomalies] = useState<AnomalyDay[]>([]);
+  const [peakTimes, setPeakTimes] = useState<PeakTime[]>([]);
+  const [heatmapMetric, setHeatmapMetric] = useState<HeatmapMetric>('avgHomeW');
+
+  useEffect(() => {
+    loadAnalytics();
+  }, []);
+
+  async function loadAnalytics() {
+    try {
+      const [hourlyRes, anomalyRes, peakRes] = await Promise.all([
+        api.get<{ data: HourlyData[] }>('/api/analytics/hourly'),
+        api.get<{ data: AnomalyDay[] }>('/api/analytics/anomalies'),
+        api.get<{ data: PeakTime[] }>('/api/analytics/peak-times'),
+      ]);
+      setHourlyData(hourlyRes.data);
+      setAnomalies(anomalyRes.data);
+      setPeakTimes(peakRes.data);
+    } catch {
+      // Silently fail
+    }
+  }
 
   return (
     <ScrollView style={commonStyles.screen} contentContainerStyle={styles.container}>
@@ -93,8 +142,88 @@ export default function AnalyticsScreen() {
           </View>
         </View>
       )}
+
+      {/* Usage Heatmap */}
+      {hourlyData.length > 0 && (
+        <View style={commonStyles.card}>
+          <Text style={commonStyles.cardTitle}>24-Hour Usage Pattern</Text>
+          <View style={styles.heatmapSelector}>
+            {([
+              { key: 'avgHomeW' as HeatmapMetric, label: 'Home', color: colors.home },
+              { key: 'avgSolarW' as HeatmapMetric, label: 'Solar', color: colors.solar },
+              { key: 'avgGridW' as HeatmapMetric, label: 'Grid', color: colors.grid },
+            ]).map(({ key, label, color }) => (
+              <TouchableOpacity
+                key={key}
+                style={[
+                  styles.heatmapChip,
+                  heatmapMetric === key && { backgroundColor: color + '22', borderColor: color },
+                ]}
+                onPress={() => setHeatmapMetric(key)}
+              >
+                <View style={[styles.chipDot, { backgroundColor: color }]} />
+                <Text
+                  style={[
+                    styles.heatmapChipText,
+                    heatmapMetric === key && { color },
+                  ]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <UsageHeatmap data={hourlyData} metric={heatmapMetric} />
+        </View>
+      )}
+
+      {/* Peak Usage Times */}
+      {peakTimes.length > 0 && (
+        <View style={commonStyles.card}>
+          <Text style={commonStyles.cardTitle}>Peak Consumption Hours</Text>
+          {peakTimes.map((peak, i) => {
+            const label = formatHour(peak.hour);
+            const watts = peak.avgW;
+            const maxW = peakTimes[0].avgW;
+            const barWidth = maxW > 0 ? (watts / maxW) * 100 : 0;
+            return (
+              <View key={peak.hour} style={styles.peakRow}>
+                <Text style={styles.peakRank}>#{i + 1}</Text>
+                <Text style={styles.peakHour}>{label}</Text>
+                <View style={styles.peakBarContainer}>
+                  <View style={[styles.peakBar, { width: `${barWidth}%` }]} />
+                </View>
+                <Text style={styles.peakValue}>
+                  {watts >= 1000 ? `${(watts / 1000).toFixed(1)} kW` : `${Math.round(watts)} W`}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Anomaly Detection */}
+      {anomalies.length > 0 && (
+        <>
+          <View style={styles.anomalyHeader}>
+            <Text style={styles.sectionTitle}>Unusual Activity</Text>
+            <View style={styles.anomalyCount}>
+              <Text style={styles.anomalyCountText}>{anomalies.length}</Text>
+            </View>
+          </View>
+          {anomalies.slice(0, 5).map((anomaly, i) => (
+            <AnomalyCard key={`${anomaly.date}-${anomaly.metric}-${i}`} anomaly={anomaly} />
+          ))}
+        </>
+      )}
     </ScrollView>
   );
+}
+
+function formatHour(hour: number): string {
+  if (hour === 0) return '12 AM';
+  if (hour === 12) return '12 PM';
+  return hour < 12 ? `${hour} AM` : `${hour - 12} PM`;
 }
 
 function StatCard({
@@ -124,6 +253,7 @@ const styles = StyleSheet.create({
   container: {
     padding: spacing.md,
     gap: spacing.md,
+    paddingBottom: spacing.xxl,
   },
   periodSelector: {
     flexDirection: 'row',
@@ -178,5 +308,87 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: colors.battery,
     borderRadius: borderRadius.full,
+  },
+  heatmapSelector: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  heatmapChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  chipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: borderRadius.full,
+  },
+  heatmapChipText: {
+    color: colors.textMuted,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+  },
+  peakRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  peakRank: {
+    color: colors.textMuted,
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    width: 24,
+  },
+  peakHour: {
+    color: colors.textSecondary,
+    fontSize: fontSize.md,
+    width: 52,
+  },
+  peakBarContainer: {
+    flex: 1,
+    height: 8,
+    backgroundColor: colors.surfaceLight,
+    borderRadius: borderRadius.full,
+    overflow: 'hidden',
+  },
+  peakBar: {
+    height: '100%',
+    backgroundColor: colors.alert,
+    borderRadius: borderRadius.full,
+  },
+  peakValue: {
+    color: colors.textPrimary,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    width: 60,
+    textAlign: 'right',
+  },
+  sectionTitle: {
+    color: colors.textPrimary,
+    fontSize: fontSize.xl,
+    fontWeight: '700',
+  },
+  anomalyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  anomalyCount: {
+    backgroundColor: colors.alert + '22',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  anomalyCountText: {
+    color: colors.alert,
+    fontSize: fontSize.sm,
+    fontWeight: '700',
   },
 });

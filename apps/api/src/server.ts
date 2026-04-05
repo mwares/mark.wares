@@ -5,6 +5,10 @@ import { authRoutes } from './routes/auth.js';
 import { energyRoutes } from './routes/energy.js';
 import { alertRoutes } from './routes/alerts.js';
 import { recommendationRoutes } from './routes/recommendations.js';
+import { analyticsRoutes } from './routes/analytics.js';
+import { teslaRoutes } from './routes/tesla.js';
+import { startPollingJob } from './jobs/poll-energy.js';
+import { startDailyDigestJob } from './jobs/daily-digest.js';
 
 export function buildApp(opts = {}) {
   const app = Fastify({
@@ -36,6 +40,8 @@ export function buildApp(opts = {}) {
   app.register(energyRoutes, { prefix: '/api/energy' });
   app.register(alertRoutes, { prefix: '/api/alerts' });
   app.register(recommendationRoutes, { prefix: '/api/recommendations' });
+  app.register(analyticsRoutes, { prefix: '/api/analytics' });
+  app.register(teslaRoutes, { prefix: '/api/tesla' });
 
   return app;
 }
@@ -48,6 +54,10 @@ async function start() {
   try {
     await app.listen({ port, host });
     app.log.info(`Server running at http://${host}:${port}`);
+
+    // Start background jobs
+    startPollingJob();
+    startDailyDigestJob();
   } catch (err) {
     app.log.error(err);
     process.exit(1);

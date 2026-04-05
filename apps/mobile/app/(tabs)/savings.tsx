@@ -1,15 +1,22 @@
 import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { colors, spacing, fontSize, commonStyles, borderRadius } from '@/theme';
+import { TariffBar } from '@/components/TariffBar';
 import { api } from '@/services/api';
-import type { Recommendation } from '@solar-monitor/shared';
+import type { Recommendation, EnergySummary } from '@solar-monitor/shared';
 
-const CATEGORY_ICONS: Record<string, string> = {
-  load_shift: 'clock',
-  battery_optimization: 'battery',
-  tou_optimization: 'dollar',
-  general: 'lightbulb',
-};
+interface TariffPeriod {
+  name: string;
+  startHour: number;
+  endHour: number;
+  ratePerKwh: number;
+}
+
+interface TariffData {
+  currency: string;
+  periods: TariffPeriod[];
+  feedInTariff: number;
+}
 
 const PRIORITY_COLORS: Record<string, string> = {
   high: colors.solar,
@@ -19,16 +26,24 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 export default function SavingsScreen() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [summary, setSummary] = useState<EnergySummary | null>(null);
+  const [tariff, setTariff] = useState<TariffData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    loadRecommendations();
+    loadData();
   }, []);
 
-  async function loadRecommendations() {
+  async function loadData() {
     try {
-      const result = await api.get<{ data: Recommendation[] }>('/api/recommendations');
-      setRecommendations(result.data);
+      const [recRes, summaryRes, tariffRes] = await Promise.all([
+        api.get<{ data: Recommendation[] }>('/api/recommendations'),
+        api.get<{ data: EnergySummary }>('/api/energy/summary?period=month'),
+        api.get<{ data: TariffData }>('/api/tesla/tariff'),
+      ]);
+      setRecommendations(recRes.data);
+      setSummary(summaryRes.data);
+      setTariff(tariffRes.data);
     } catch {
       // Will show empty state
     } finally {
@@ -36,12 +51,26 @@ export default function SavingsScreen() {
     }
   }
 
-  // Calculate estimated total savings
+  // Calculate estimated total savings using tariff data
   const totalSavingsKwh = recommendations.reduce(
     (sum, r) => sum + (r.estimatedSavingsKwh || 0),
     0,
   );
-  const estimatedMonthlySavings = totalSavingsKwh * 0.3 * 30; // $0.30/kWh * 30 days
+  const avgRate = tariff
+    ? tariff.periods.reduce((sum, p) => sum + p.ratePerKwh, 0) / tariff.periods.length
+    : 0.3;
+  const estimatedMonthlySavings = totalSavingsKwh * avgRate * 30;
+
+  const selfConsumptionPercent = summary
+    ? Math.round(summary.selfConsumptionRatio * 100)
+    : 0;
+
+  const scoreColor =
+    selfConsumptionPercent >= 70
+      ? colors.battery
+      : selfConsumptionPercent >= 40
+        ? colors.solar
+        : colors.alert;
 
   return (
     <ScrollView style={commonStyles.screen} contentContainerStyle={styles.container}>
@@ -63,17 +92,59 @@ export default function SavingsScreen() {
       <View style={commonStyles.card}>
         <Text style={commonStyles.cardTitle}>Self-Consumption Score</Text>
         <View style={[commonStyles.row, { gap: spacing.md }]}>
-          <View style={styles.scoreCircle}>
-            <Text style={styles.scoreText}>72</Text>
-            <Text style={styles.scoreUnit}>%</Text>
+          <View style={[styles.scoreCircle, { borderColor: scoreColor }]}>
+            <Text style={[styles.scoreText, { color: scoreColor }]}>
+              {selfConsumptionPercent}
+            </Text>
+            <Text style={[styles.scoreUnit, { color: scoreColor }]}>%</Text>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.scoreTip}>
-              Good! You're using 72% of your solar energy directly. Follow the tips below to improve further.
+              {selfConsumptionPercent >= 70
+                ? `Great! You're using ${selfConsumptionPercent}% of your solar energy directly.`
+                : selfConsumptionPercent >= 40
+                  ? `You're using ${selfConsumptionPercent}% of your solar energy. Follow the tips below to improve.`
+                  : `Only ${selfConsumptionPercent}% self-consumption. Shifting loads to solar hours will save significantly.`}
             </Text>
           </View>
         </View>
       </View>
+
+      {/* TOU Tariff Display */}
+      {tariff && (
+        <View style={commonStyles.card}>
+          <Text style={commonStyles.cardTitle}>Time-of-Use Tariff</Text>
+          <TariffBar
+            periods={tariff.periods}
+            feedInTariff={tariff.feedInTariff}
+            currency={tariff.currency}
+          />
+        </View>
+      )}
+
+      {/* Monthly Cost Breakdown */}
+      {summary && tariff && (
+        <View style={commonStyles.card}>
+          <Text style={commonStyles.cardTitle}>Monthly Estimate</Text>
+          <CostRow
+            label="Grid import cost"
+            value={`-$${(summary.totalImportedKwh * avgRate).toFixed(2)}`}
+            color={colors.alert}
+          />
+          <CostRow
+            label="Solar export credit"
+            value={`+$${(summary.totalExportedKwh * tariff.feedInTariff).toFixed(2)}`}
+            color={colors.battery}
+          />
+          <View style={styles.costDivider} />
+          <CostRow
+            label="Net cost"
+            value={`$${(summary.totalImportedKwh * avgRate - summary.totalExportedKwh * tariff.feedInTariff).toFixed(2)}`}
+            color={colors.textPrimary}
+            bold
+          />
+        </View>
+      )}
 
       {/* Recommendations */}
       <Text style={styles.sectionTitle}>Recommendations</Text>
@@ -112,7 +183,8 @@ export default function SavingsScreen() {
             {rec.estimatedSavingsKwh && (
               <View style={styles.savingsBadge}>
                 <Text style={styles.savingsBadgeText}>
-                  Save ~{rec.estimatedSavingsKwh.toFixed(1)} kWh/day
+                  Save ~{rec.estimatedSavingsKwh.toFixed(1)} kWh/day (~$
+                  {(rec.estimatedSavingsKwh * avgRate).toFixed(2)}/day)
                 </Text>
               </View>
             )}
@@ -123,10 +195,34 @@ export default function SavingsScreen() {
   );
 }
 
+function CostRow({
+  label,
+  value,
+  color,
+  bold,
+}: {
+  label: string;
+  value: string;
+  color: string;
+  bold?: boolean;
+}) {
+  return (
+    <View style={styles.costRow}>
+      <Text style={[styles.costLabel, bold && { color: colors.textPrimary, fontWeight: '700' }]}>
+        {label}
+      </Text>
+      <Text style={[styles.costValue, { color }, bold && { fontSize: fontSize.xl }]}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     padding: spacing.md,
     gap: spacing.md,
+    paddingBottom: spacing.xxl,
   },
   overviewCard: {
     borderColor: colors.savings,
@@ -147,18 +243,15 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: borderRadius.full,
     borderWidth: 3,
-    borderColor: colors.battery,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
   },
   scoreText: {
-    color: colors.battery,
     fontSize: fontSize.xxl,
     fontWeight: '800',
   },
   scoreUnit: {
-    color: colors.battery,
     fontSize: fontSize.md,
     fontWeight: '600',
   },
@@ -166,6 +259,25 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: fontSize.md,
     lineHeight: 20,
+  },
+  costRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: spacing.xs,
+  },
+  costLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.md,
+  },
+  costValue: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+  },
+  costDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.xs,
   },
   sectionTitle: {
     color: colors.textPrimary,

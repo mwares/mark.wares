@@ -74,6 +74,27 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  // ── Profile ──
+
+  app.get(
+    '/profile',
+    { onRequest: [(app as any).authenticate] },
+    async (request) => {
+      const userId = (request.user as any).id;
+      const result = await db.query(
+        'SELECT id, email, created_at FROM users WHERE id = $1',
+        [userId],
+      );
+      const user = result.rows[0];
+      return {
+        data: {
+          email: user.email,
+          createdAt: user.created_at,
+        },
+      };
+    },
+  );
+
   // ── Push Token Management ──
 
   app.post<{ Body: { token: string; platform: string } }>(

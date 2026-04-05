@@ -1,8 +1,12 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { colors } from '@/theme';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
 
 export default function RootLayout() {
+  // Register for push notifications on app start
+  usePushNotifications();
+
   return (
     <>
       <StatusBar style="light" />

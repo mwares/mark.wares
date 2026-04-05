@@ -52,6 +52,13 @@ export default function TabLayout() {
           tabBarLabel: 'Savings',
         }}
       />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
+          tabBarLabel: 'Settings',
+        }}
+      />
     </Tabs>
   );
 }
